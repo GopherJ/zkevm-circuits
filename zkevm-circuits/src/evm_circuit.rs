@@ -1,7 +1,7 @@
 //! The EVM circuit implementation.
 
 use halo2_proofs::{
-    circuit::{Layouter, SimpleFloorPlanner, Value},
+    circuit::{AssignedCell, Layouter, Region, SimpleFloorPlanner, Value},
     plonk::*,
 };
 
@@ -24,10 +24,10 @@ use crate::{
         BlockTable, BytecodeTable, CopyTable, ExpTable, KeccakTable, LookupTable, RwTable, TxTable,
         UXTable,
     },
-    util::{Challenges, SubCircuit, SubCircuitConfig},
+    util::{word, Challenges, SubCircuit, SubCircuitConfig},
 };
 use bus_mapping::evm::OpcodeId;
-use eth_types::Field;
+use eth_types::{Field, Keccak, Word};
 use execution::ExecutionConfig;
 use itertools::Itertools;
 use strum::IntoEnumIterator;
@@ -50,6 +50,8 @@ pub struct EvmCircuitConfig<F> {
     copy_table: CopyTable,
     keccak_table: KeccakTable,
     exp_table: ExpTable,
+    rpi_digest_bytes_limbs: Column<Advice>,
+    pi_instance: Column<Instance>, // [keccak_digest_hi, keccak_digest_lo]
 }
 
 /// Circuit configuration arguments
@@ -125,6 +127,8 @@ impl<F: Field> SubCircuitConfig<F> for EvmCircuitConfig<F> {
         exp_table.annotate_columns(meta);
         u8_table.annotate_columns(meta);
         u16_table.annotate_columns(meta);
+        let rpi_digest_bytes_limbs = meta.advice_column();
+        let pi_instance = meta.instance_column();
 
         Self {
             fixed_table,
@@ -138,6 +142,8 @@ impl<F: Field> SubCircuitConfig<F> for EvmCircuitConfig<F> {
             copy_table,
             keccak_table,
             exp_table,
+            rpi_digest_bytes_limbs,
+            pi_instance,
         }
     }
 }
@@ -164,6 +170,27 @@ impl<F: Field> EvmCircuitConfig<F> {
                 Ok(())
             },
         )
+    }
+
+    /// Assign digest word
+    fn assign_rpi_digest_word(
+        &self,
+        region: &mut Region<'_, F>,
+        digest_word: word::Word<F>,
+    ) -> Result<word::Word<AssignedCell<F, F>>, Error> {
+        let lo_assigned_cell = region.assign_advice(
+            || "rpi_digest_bytes_limbs_lo",
+            self.rpi_digest_bytes_limbs,
+            0,
+            || digest_word.into_value().lo(),
+        )?;
+        let hi_assigned_cell = region.assign_advice(
+            || "rpi_digest_bytes_limbs_hi",
+            self.rpi_digest_bytes_limbs,
+            1,
+            || digest_word.into_value().hi(),
+        )?;
+        Ok(word::Word::new([lo_assigned_cell, hi_assigned_cell]))
     }
 }
 
@@ -267,7 +294,37 @@ impl<F: Field> SubCircuit<F> for EvmCircuit<F> {
         let block = self.block.as_ref().unwrap();
 
         config.load_fixed_table(layouter, self.fixed_table_tags.clone())?;
+
+        if let Some(ref block) = self.block {
+            let digest_word_assigned = layouter.assign_region(
+                || "region 0",
+                |mut region| {
+                    let mut keccak = Keccak::default();
+                    keccak.update(&block.get_rpi_bytes());
+                    let digest = keccak.digest();
+                    let digest_word = word::Word::from(Word::from_big_endian(&digest));
+                    Ok(config.assign_rpi_digest_word(&mut region, digest_word))
+                },
+            )??;
+
+            layouter.constrain_instance(digest_word_assigned.lo().cell(), config.pi_instance, 0);
+            layouter.constrain_instance(digest_word_assigned.hi().cell(), config.pi_instance, 1);
+        }
         config.execution.assign_block(layouter, block, challenges)
+    }
+
+    /// Compute the public inputs for this circuit.
+    fn instance(&self) -> Vec<Vec<F>> {
+        if let Some(ref block) = self.block {
+            let mut keccak = Keccak::default();
+            keccak.update(&block.get_rpi_bytes());
+            let digest = keccak.digest();
+            let rpi_digest_byte_field = word::Word::from(Word::from_big_endian(&digest));
+
+            vec![vec![rpi_digest_byte_field.lo(), rpi_digest_byte_field.hi()]]
+        } else {
+            vec![]
+        }
     }
 }
 

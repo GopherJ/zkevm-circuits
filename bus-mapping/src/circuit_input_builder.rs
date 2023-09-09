@@ -166,7 +166,7 @@ impl<'a, C: CircuitsParams> CircuitInputBuilder<C> {
         &mut self,
         id: u64,
         eth_tx: &eth_types::Transaction,
-        is_success: bool,
+        geth_trace: &GethExecTrace,
     ) -> Result<Transaction, Error> {
         let call_id = self.block_ctx.rwc.0;
 
@@ -187,7 +187,7 @@ impl<'a, C: CircuitsParams> CircuitInputBuilder<C> {
             &self.sdb,
             &mut self.code_db,
             eth_tx,
-            is_success,
+            geth_trace,
         )
     }
 
@@ -224,7 +224,7 @@ impl<'a, C: CircuitsParams> CircuitInputBuilder<C> {
         is_last_tx: bool,
         tx_index: u64,
     ) -> Result<(), Error> {
-        let mut tx = self.new_tx(tx_index, eth_tx, !geth_trace.failed)?;
+        let mut tx = self.new_tx(tx_index, eth_tx, geth_trace)?;
         let mut tx_ctx = TransactionContext::new(eth_tx, geth_trace, is_last_tx)?;
 
         // Generate BeginTx step
@@ -372,7 +372,10 @@ impl CircuitInputBuilder<DynamicCParams> {
             let max_calldata = eth_block
                 .transactions
                 .iter()
-                .fold(0, |acc, tx| acc + tx.input.len());
+                .enumerate()
+                .fold(0, |acc, (idx, tx)| {
+                    acc + tx.input.len() + geth_traces[idx].return_value.len()
+                });
             let max_exp_steps = self
                 .block
                 .exp_events

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use eth_types::{evm_types::Memory, geth_types, GethExecTrace};
+use eth_types::{evm_types::Memory, geth_types, Bytes, GethExecTrace};
 use ethers_core::utils::get_contract_address;
 
 use crate::{
@@ -187,6 +187,8 @@ pub struct Transaction {
     pub(crate) calls: Vec<Call>,
     /// Execution steps
     steps: Vec<ExecStep>,
+    /// Return data
+    pub return_value: Vec<u8>,
 }
 
 impl Transaction {
@@ -197,53 +199,60 @@ impl Transaction {
         sdb: &StateDB,
         code_db: &mut CodeDB,
         eth_tx: &eth_types::Transaction,
-        is_success: bool,
+        geth_trace: &GethExecTrace,
     ) -> Result<Self, Error> {
         let (found, _) = sdb.get_account(&eth_tx.from);
         if !found {
             return Err(Error::AccountNotFound(eth_tx.from));
         }
+        let is_success = !geth_trace.failed;
 
-        let call = if let Some(address) = eth_tx.to {
+        let (call, return_value) = if let Some(address) = eth_tx.to {
             // Contract Call / Transfer
             let (found, account) = sdb.get_account(&address);
             if !found {
                 return Err(Error::AccountNotFound(address));
             }
             let code_hash = account.code_hash;
-            Call {
-                call_id,
-                kind: CallKind::Call,
-                is_root: true,
-                is_persistent: is_success,
-                is_success,
-                caller_address: eth_tx.from,
-                address,
-                code_source: CodeSource::Address(address),
-                code_hash,
-                depth: 1,
-                value: eth_tx.value,
-                call_data_length: eth_tx.input.as_ref().len() as u64,
-                ..Default::default()
-            }
+            (
+                Call {
+                    call_id,
+                    kind: CallKind::Call,
+                    is_root: true,
+                    is_persistent: is_success,
+                    is_success,
+                    caller_address: eth_tx.from,
+                    address,
+                    code_source: CodeSource::Address(address),
+                    code_hash,
+                    depth: 1,
+                    value: eth_tx.value,
+                    call_data_length: eth_tx.input.as_ref().len() as u64,
+                    ..Default::default()
+                },
+                hex::decode(&geth_trace.return_value[2..]).unwrap(),
+            )
         } else {
             // Contract creation
             let code_hash = code_db.insert(eth_tx.input.to_vec());
-            Call {
-                call_id,
-                kind: CallKind::Create,
-                is_root: true,
-                is_persistent: is_success,
-                is_success,
-                caller_address: eth_tx.from,
-                address: get_contract_address(eth_tx.from, eth_tx.nonce),
-                code_source: CodeSource::Tx,
-                code_hash,
-                depth: 1,
-                value: eth_tx.value,
-                call_data_length: eth_tx.input.len().try_into().unwrap(),
-                ..Default::default()
-            }
+            (
+                Call {
+                    call_id,
+                    kind: CallKind::Create,
+                    is_root: true,
+                    is_persistent: is_success,
+                    is_success,
+                    caller_address: eth_tx.from,
+                    address: get_contract_address(eth_tx.from, eth_tx.nonce),
+                    code_source: CodeSource::Tx,
+                    code_hash,
+                    depth: 1,
+                    value: eth_tx.value,
+                    call_data_length: eth_tx.input.len().try_into().unwrap(),
+                    ..Default::default()
+                },
+                Vec::new(),
+            )
         };
 
         Ok(Self {
@@ -251,6 +260,7 @@ impl Transaction {
             tx: eth_tx.into(),
             calls: vec![call],
             steps: Vec::new(),
+            return_value,
         })
     }
 

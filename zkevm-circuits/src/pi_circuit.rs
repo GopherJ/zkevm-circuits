@@ -99,7 +99,6 @@ pub struct PiCircuitConfig<F: Field> {
     q_rpi_byte_enable: Selector,
 
     pi_instance: Column<Instance>, // keccak_digest_hi, keccak_digest_lo
-
     _marker: PhantomData<F>,
     // External tables
     block_table: BlockTable,
@@ -1385,6 +1384,9 @@ impl<F: Field> SubCircuit<F> for PiCircuit<F> {
                 region.name_column(|| "is_final", config.is_final);
 
                 region.name_column(|| "Public_Inputs", config.pi_instance);
+                // region.name_column(|| "Public_Inputs_Tx_To", config.pi_tx_to);
+                // region.name_column(|| "Public_Inputs_Tx_Calldata", config.pi_tx_calldata);
+                // region.name_column(|| "Public_Inputs_Tx_ReturnData", config.pi_tx_return_data);
 
                 let circuit_len = config.circuit_len();
                 let mut rpi_bytes = vec![0u8; circuit_len];

@@ -1,3 +1,5 @@
+use std::iter;
+
 use super::{ExecStep, Rw, RwMap, Transaction};
 use crate::{
     evm_circuit::{detect_fixed_table_tags, EvmCircuit},
@@ -11,8 +13,9 @@ use bus_mapping::{
     state_db::CodeDB,
     Error,
 };
-use eth_types::{Address, Field, ToScalar, Word};
+use eth_types::{Address, Field, ToScalar, Word, H160};
 use halo2_proofs::circuit::Value;
+use itertools::Itertools;
 
 // TODO: Remove fields that are duplicated in`eth_block`
 /// Block is the struct used by all circuits, which contains all the needed
@@ -124,6 +127,27 @@ impl<F: Field> Block<F> {
         );
         log::debug!("evm circuit uses k = {}, rows = {}", k, rows_needed);
         k
+    }
+
+    /// Compute public input bytes
+    pub fn get_rpi_bytes(&self) -> Vec<u8> {
+        iter::empty()
+            .chain(self.txs.iter().map(|tx| {
+                (
+                    tx.to.unwrap_or(H160::zero()),
+                    &tx.call_data,
+                    &tx.return_value,
+                )
+            }))
+            .flat_map(|(to, calldata, return_value)| {
+                to.to_fixed_bytes()
+                    .iter()
+                    .copied()
+                    .chain(calldata.0.iter().copied())
+                    .chain(return_value.iter().copied())
+                    .collect_vec()
+            })
+            .collect_vec()
     }
 }
 

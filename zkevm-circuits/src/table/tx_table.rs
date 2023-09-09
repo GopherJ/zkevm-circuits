@@ -29,6 +29,10 @@ pub enum TxFieldTag {
     TxSignHash,
     /// CallData
     CallData,
+    // Bytecode
+    Bytecode,
+    /// RetunData
+    ReturnData,
 }
 impl_expr!(TxFieldTag);
 
@@ -98,11 +102,13 @@ impl TxTable {
             txs.len(),
             max_txs
         );
-        let sum_txs_calldata = txs.iter().map(|tx| tx.call_data.len()).sum();
+        let sum_txs_calldata: usize = txs.iter().map(|tx| tx.call_data.len()).sum();
+        let sum_txs_return_data: usize = txs.iter().map(|tx| tx.return_value.len()).sum();
         assert!(
-            sum_txs_calldata <= max_calldata,
-            "sum_txs_calldata <= max_calldata: sum_txs_calldata={}, max_calldata={}",
+            sum_txs_calldata + sum_txs_return_data <= max_calldata,
+            "sum_txs_calldata + sum_txs_return_data <= max_calldata: sum_txs_calldata={}, sum_txs_return_data={}, max_calldata={}",
             sum_txs_calldata,
+            sum_txs_return_data,
             max_calldata,
         );
 
@@ -151,7 +157,7 @@ impl TxTable {
                 // region that has a size parametrized by max_calldata with all
                 // the tx calldata.  This is required to achieve a constant fixed column tag
                 // regardless of the number of input txs or the calldata size of each tx.
-                let mut calldata_assignments: Vec<[Value<F>; 5]> = Vec::new();
+                let mut assignments: Vec<[Value<F>; 5]> = Vec::new();
                 // Assign Tx data (all tx fields except for calldata)
                 let padding_txs: Vec<_> = (txs.len()..max_txs)
                     .map(|i| Transaction::padding_tx(i + 1))
@@ -209,23 +215,39 @@ impl TxTable {
                             ]
                         })
                         .collect_vec();
+                    let tx_return_data = tx
+                        .return_value
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, byte)| {
+                            [
+                                tx_id,
+                                Value::known(F::from(TxContextFieldTag::ReturnData as u64)),
+                                Value::known(F::from(idx as u64)),
+                                Value::known(F::from(*byte as u64)),
+                                Value::known(F::ZERO),
+                            ]
+                        })
+                        .collect_vec();
                     for row in tx_data {
                         assign_row(&mut region, offset, &advice_columns, &self.tag, &row, "")?;
                         offset += 1;
                     }
-                    calldata_assignments.extend(tx_calldata.iter());
+                    assignments.extend(tx_calldata.iter());
+                    assignments.extend(tx_return_data.iter());
                 }
-                // Assign Tx calldata
-                let padding_calldata = (sum_txs_calldata..max_calldata).map(|_| {
-                    [
-                        Value::known(F::ZERO),
-                        Value::known(F::from(TxContextFieldTag::CallData as u64)),
-                        Value::known(F::ZERO),
-                        Value::known(F::ZERO),
-                        Value::known(F::ZERO),
-                    ]
-                });
-                for row in calldata_assignments.into_iter().chain(padding_calldata) {
+                // Assign Tx calldata & return data
+                let padding_data =
+                    (sum_txs_calldata + sum_txs_return_data..max_calldata).map(|_| {
+                        [
+                            Value::known(F::ZERO),
+                            Value::known(F::from(TxContextFieldTag::CallData as u64)),
+                            Value::known(F::ZERO),
+                            Value::known(F::ZERO),
+                            Value::known(F::ZERO),
+                        ]
+                    });
+                for row in assignments.into_iter().chain(padding_data) {
                     assign_row(&mut region, offset, &advice_columns, &self.tag, &row, "")?;
                     offset += 1;
                 }

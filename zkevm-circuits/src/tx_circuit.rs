@@ -261,6 +261,8 @@ impl<F: Field> TxCircuit<F> {
                 }
 
                 // Assign call data
+                // TODO: assign for return data, since this is only useful for super_circuit we dont
+                // do it now
                 let mut calldata_count = 0;
                 for (i, tx) in self.txs.iter().enumerate() {
                     for (index, byte) in tx.call_data.0.iter().enumerate() {
